@@ -1,0 +1,80 @@
+# Default 25 camera feeds for the multigrid.
+# These map to streams generated locally by MediaMTX using ffmpeg lavfi sources.
+# MediaMTX starts ffmpeg for each path via runOnInit — no external network required.
+# HLS is served at http://localhost:8888/{name}/index.m3u8
+feeds:
+  - name: cam_01
+    rtsp_url: rtsp://mediamtx:8554/cam_01
+    enabled: true
+  - name: cam_02
+    rtsp_url: rtsp://mediamtx:8554/cam_02
+    enabled: true
+  - name: cam_03
+    rtsp_url: rtsp://mediamtx:8554/cam_03
+    enabled: true
+  - name: cam_04
+    rtsp_url: rtsp://mediamtx:8554/cam_04
+    enabled: true
+  - name: cam_05
+    rtsp_url: rtsp://mediamtx:8554/cam_05
+    enabled: true
+  - name: cam_06
+    rtsp_url: rtsp://mediamtx:8554/cam_06
+    enabled: true
+  - name: cam_07
+    rtsp_url: rtsp://mediamtx:8554/cam_07
+    enabled: true
+  - name: cam_08
+    rtsp_url: rtsp://mediamtx:8554/cam_08
+    enabled: true
+  - name: cam_09
+    rtsp_url: rtsp://mediamtx:8554/cam_09
+    enabled: true
+  - name: cam_10
+    rtsp_url: rtsp://mediamtx:8554/cam_10
+    enabled: true
+  - name: cam_11
+    rtsp_url: rtsp://mediamtx:8554/cam_11
+    enabled: true
+  - name: cam_12
+    rtsp_url: rtsp://mediamtx:8554/cam_12
+    enabled: true
+  - name: cam_13
+    rtsp_url: rtsp://mediamtx:8554/cam_13
+    enabled: true
+  - name: cam_14
+    rtsp_url: rtsp://mediamtx:8554/cam_14
+    enabled: true
+  - name: cam_15
+    rtsp_url: rtsp://mediamtx:8554/cam_15
+    enabled: true
+  - name: cam_16
+    rtsp_url: rtsp://mediamtx:8554/cam_16
+    enabled: true
+  - name: cam_17
+    rtsp_url: rtsp://mediamtx:8554/cam_17
+    enabled: true
+  - name: cam_18
+    rtsp_url: rtsp://mediamtx:8554/cam_18
+    enabled: true
+  - name: cam_19
+    rtsp_url: rtsp://mediamtx:8554/cam_19
+    enabled: true
+  - name: cam_20
+    rtsp_url: rtsp://mediamtx:8554/cam_20
+    enabled: true
+  - name: cam_21
+    rtsp_url: rtsp://mediamtx:8554/cam_21
+    enabled: true
+  - name: cam_22
+    rtsp_url: rtsp://mediamtx:8554/cam_22
+    enabled: true
+  - name: cam_23
+    rtsp_url: rtsp://mediamtx:8554/cam_23
+    enabled: true
+  - name: cam_24
+    rtsp_url: rtsp://mediamtx:8554/cam_24
+    enabled: true
+  - name: cam_25
+    rtsp_url: rtsp://mediamtx:8554/cam_25
+    enabled: true

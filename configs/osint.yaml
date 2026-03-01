@@ -1,0 +1,14 @@
+# Public OSINT sources via RSS. Replace/add sources that you are allowed to ingest.
+# Keep it clean: no account-required scraping, no ToS bypass.
+poll_interval_seconds: 300
+sources:
+  - name: DoD Media (press releases)
+    type: rss
+    url: https://www.defense.gov/News/Releases/?output=1
+  - name: USCG Newsroom (press releases)
+    type: rss
+    url: https://www.news.uscg.mil/News-by-Region/?output=1
+  - name: NOAA Space Weather Alerts
+    type: rss
+    url: https://services.swpc.noaa.gov/products/alerts.json
+    # Note: this is JSON, not RSS; worker will detect and parse.

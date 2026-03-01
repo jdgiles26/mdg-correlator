@@ -1,0 +1,110 @@
+version: "3.9"
+
+services:
+
+  # ── Infrastructure ──────────────────────────────────────────────────────────
+
+  nats:
+    image: nats:2.10
+    command: ["-js"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - miniodata:/data
+
+  # Vector DB — always running; worker only writes if ENABLE_EMBEDDINGS=true
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrantdata:/qdrant/storage
+
+  mediamtx:
+    image: bluenviron/mediamtx:1.9.0
+    ports:
+      - "8554:8554"  # RTSP
+      - "8888:8888"  # HLS
+      - "8889:8889"  # WebRTC
+    volumes:
+      - ./services/mediamtx/mediamtx.yml:/mediamtx.yml:ro
+
+  # ── Application services ────────────────────────────────────────────────────
+
+  api:
+    build: ./services/api
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://$POSTGRES_USER:$POSTGRES_PASSWORD@postgres:$POSTGRES_PORT/$POSTGRES_DB
+      NATS_URL: ${NATS_URL}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+      MINIO_BUCKET: ${MINIO_BUCKET}
+      MEDIAMTX_HLS_BASE: http://localhost:8888
+      ENABLE_EMBEDDINGS: ${ENABLE_EMBEDDINGS}
+    depends_on:
+      - postgres
+      - nats
+      - minio
+      - qdrant
+      - mediamtx
+    ports:
+      - "${API_PORT}:8080"
+    volumes:
+      - ./configs:/app/configs:ro
+
+  worker:
+    build: ./services/worker
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://$POSTGRES_USER:$POSTGRES_PASSWORD@postgres:$POSTGRES_PORT/$POSTGRES_DB
+      NATS_URL: ${NATS_URL}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+      MINIO_BUCKET: ${MINIO_BUCKET}
+      MEDIAMTX_RTSP_BASE: rtsp://mediamtx:8554
+      ENABLE_EMBEDDINGS: ${ENABLE_EMBEDDINGS}
+    depends_on:
+      - api
+      - qdrant
+    volumes:
+      - ./configs:/app/configs:ro
+
+  ui:
+    build: ./services/ui
+    environment:
+      VITE_API_BASE: http://localhost:${API_PORT}
+      VITE_HLS_BASE: http://localhost:8888
+    depends_on:
+      - api
+    ports:
+      - "${UI_PORT}:5173"
+
+volumes:
+  pgdata:
+  miniodata:
+  qdrantdata:

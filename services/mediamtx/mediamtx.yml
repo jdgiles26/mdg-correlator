@@ -1,0 +1,20 @@
+logLevel: info
+
+rtspAddress: :8554
+
+hls: yes
+hlsAddress: :8888
+hlsVariant: mpegts
+hlsSegmentDuration: 2s
+hlsPartDuration: 0.2s
+hlsSegmentCount: 6
+hlsAllowOrigin: "*"
+
+webrtc: yes
+webrtcAddress: :8889
+
+# Allow dynamic paths created by the worker via RTSP push.
+paths:
+  all:
+    source: publisher
+    runOnReadyRestart: yes
