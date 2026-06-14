@@ -2,6 +2,9 @@ logLevel: info
 
 rtspAddress: :8554
 
+rtmp: yes
+rtmpAddress: :1935
+
 hls: yes
 hlsAddress: :8888
 hlsVariant: mpegts

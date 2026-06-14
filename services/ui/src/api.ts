@@ -45,6 +45,23 @@ export async function ingestUrl(url: string): Promise<any> {
   return r.json();
 }
 
+// ─── Events ───────────────────────────────────────────────────────────────────
+export type MissionEvent = {
+  id: number;
+  topic: string;
+  severity: string;
+  source: string;
+  payload: any;
+  score?: number | null;
+  ts: string;
+};
+
+export async function listEvents(limit: number = 100): Promise<MissionEvent[]> {
+  const r = await fetch(`${API_BASE}/api/events?limit=${encodeURIComponent(String(limit))}`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
 // ─── Graph ────────────────────────────────────────────────────────────────────
 export type GraphEntity = {
   id: number; entity_type: string; name: string;
@@ -95,7 +112,7 @@ export async function createEdge(body: { src_id: number; dst_id: number; relatio
 
 // ─── Search ───────────────────────────────────────────────────────────────────
 export type SearchHit = {
-  qdrant_id: string | null; score: number; text: string;
+  score: number; text: string;
   source_label: string | null; source_type: string; ingest_id: number; chunk_id: number;
 };
 export type SearchResult = { enabled: boolean; hits: SearchHit[]; query: string; message?: string };
@@ -153,6 +170,66 @@ export async function getTask(id: number): Promise<Task & { audit_trail: any[] }
   return r.json();
 }
 
+export type TaskReport = {
+  id: number;
+  task_id: number;
+  source_event_id: number | null;
+  report_type: string;
+  title: string;
+  summary: string | null;
+  threat_detected: boolean;
+  threat_risk: string;
+  risk_score: number;
+  confidence_score: number;
+  generation_mode: string;
+  model_name: string | null;
+  correlated_events_count: number;
+  related_sources_count: number;
+  report_markdown: string | null;
+  report_payload: any;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export async function listReports(taskId?: number): Promise<{ items: TaskReport[] }> {
+  const qs = new URLSearchParams();
+  if (typeof taskId === "number") qs.set("task_id", String(taskId));
+  const r = await fetch(`${API_BASE}/api/reports?${qs.toString()}`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function getReport(id: number): Promise<TaskReport> {
+  const r = await fetch(`${API_BASE}/api/reports/${id}`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function generateTaskReport(taskId: number): Promise<TaskReport> {
+  const r = await fetch(`${API_BASE}/api/reports/generate/task/${taskId}`, {
+    method: "POST",
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function downloadTaskReport(id: number): Promise<void> {
+  const r = await fetch(`${API_BASE}/api/reports/${id}/download`);
+  if (!r.ok) throw new Error(await r.text());
+  const blob = await r.blob();
+  const disposition = r.headers.get("content-disposition") || "";
+  const match = disposition.match(/filename=\"?([^"]+)\"?/i);
+  const filename = match?.[1] || `task-report-${id}.md`;
+  const url = window.URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.URL.revokeObjectURL(url);
+}
+
 // ─── Audit ────────────────────────────────────────────────────────────────────
 export async function listAudit(params?: { actor?: string; action?: string; limit?: number }): Promise<{ total: number; items: any[] }> {
   const qs = new URLSearchParams();
@@ -160,6 +237,182 @@ export async function listAudit(params?: { actor?: string; action?: string; limi
   if (params?.action) qs.set("action", params.action);
   if (params?.limit) qs.set("limit", String(params.limit));
   const r = await fetch(`${API_BASE}/api/audit?${qs}`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+// ─── Detection ────────────────────────────────────────────────────────────────
+export type Detection = {
+  class_id: number;
+  class_name: string;
+  score: number;
+  bbox: { x: number; y: number; width: number; height: number };
+};
+
+export type DetectionResponse = {
+  detections: Detection[];
+  model: string;
+};
+
+export type DetectionHealth = {
+  available: boolean;
+  pil_available: boolean;
+  model_loaded: boolean;
+};
+
+export async function detectObjects(imageBase64: string, threshold: number = 0.3): Promise<DetectionResponse> {
+  const r = await fetch(`${API_BASE}/api/detect/frame`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ image_base64: imageBase64, threshold })
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function publishUIDetectionEvent(body: {
+  feed: string;
+  source_url?: string | null;
+  preset?: string | null;
+  cell_index?: number | null;
+  detections: Detection[];
+}): Promise<{ ok: boolean; published: boolean; topic?: string; score?: number; count?: number; feed?: string; reason?: string }> {
+  const r = await fetch(`${API_BASE}/api/detect/event`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function detectionHealth(): Promise<DetectionHealth> {
+  const r = await fetch(`${API_BASE}/api/detect/health`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+// ─── AI runtime controls ─────────────────────────────────────────────────────
+export type AISettings = {
+  ollama_base_url: string;
+  ollama_generate_model: string | null;
+  embeddings_enabled: boolean;
+  background_inference_enabled: boolean;
+  background_inference_fps: number;
+  background_detection_confidence: number;
+  ui_detection_enabled: boolean;
+  ui_detection_fps: number;
+  ui_detection_threshold: number;
+  predictor_enabled: boolean;
+  predictor_min_events: number;
+  predictor_min_anomaly_score: number;
+  predictor_cooldown_sec: number;
+  predictor_emit_empty_windows: boolean;
+  correlator_enabled: boolean;
+  correlator_min_score: number;
+  correlator_cooldown_sec: number;
+  ner_enabled: boolean;
+  task_alerts_enabled: boolean;
+  task_auto_report_enabled: boolean;
+  task_report_match_threshold: number;
+  task_report_lookback_hours: number;
+  task_report_max_events: number;
+  task_event_cooldown_sec: number;
+};
+
+export type OllamaModel = {
+  name: string;
+  size: number | null;
+  modified_at: string | null;
+  digest: string | null;
+  kind: "generate" | "embedding";
+  details: Record<string, unknown>;
+};
+
+export type OllamaStatus = {
+  base_url: string;
+  reachable: boolean;
+  error: string | null;
+  models: OllamaModel[];
+  generate_models: string[];
+};
+
+export type AISettingsResponse = {
+  settings: AISettings;
+  ollama: OllamaStatus;
+};
+
+export type SystemStatus = {
+  api: { ok: boolean; version: string };
+  ollama: {
+    reachable: boolean;
+    base_url: string | null;
+    model: string | null;
+    generate_models: string[];
+    error: string | null;
+  };
+  detections: {
+    mediapipe_available: boolean;
+    pil_available: boolean;
+    model_loaded: boolean;
+    ui_detection_enabled: boolean;
+    background_inference_enabled: boolean;
+  };
+  runtime: {
+    embeddings_enabled: boolean;
+    task_alerts_enabled: boolean;
+    task_auto_report_enabled: boolean;
+    report_generation_ready: boolean;
+    open_high_priority_tasks: number;
+    saved_reports: number;
+  };
+  feed_issues: Array<{
+    feed: string;
+    topic: string;
+    severity: string;
+    error: string;
+    hint?: string | null;
+    ts?: string | null;
+  }>;
+};
+
+export async function getAISettings(): Promise<AISettingsResponse> {
+  const r = await fetch(`${API_BASE}/api/ai/settings`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function updateAISettings(body: AISettings): Promise<AISettingsResponse> {
+  const r = await fetch(`${API_BASE}/api/ai/settings`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function getAIBrief(limit: number = 20): Promise<{ model: string; summary: string; events_considered: number }> {
+  const r = await fetch(`${API_BASE}/api/ai/brief?limit=${encodeURIComponent(String(limit))}`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function getSystemStatus(): Promise<SystemStatus> {
+  const r = await fetch(`${API_BASE}/api/system/status`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function answerSearchWithLocalModel(
+  query: string,
+  context: string[]
+): Promise<{ model: string; answer: string }> {
+  const r = await fetch(`${API_BASE}/api/ai/search-answer`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query, context }),
+  });
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }

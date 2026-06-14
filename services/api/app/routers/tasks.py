@@ -17,6 +17,8 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..models import Task, TaskEvent, Event as BusEvent, AuditLog
 from ..events_bus import publish_event
+from ..reporting import evaluate_task_intelligence, persist_task_report
+from ..runtime_settings import load_ai_settings
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -116,6 +118,44 @@ async def create_task(body: TaskIn, db: Session = Depends(get_db)):
     db.refresh(t)
     await publish_event("task.created", "INFO", "api",
                         {"task_id": t.id, "title": t.title, "priority": t.priority})
+
+    try:
+        ai = load_ai_settings(db)
+        evaluation = evaluate_task_intelligence(db, t)
+        report = None
+        if ai.get("task_auto_report_enabled", True):
+            report = persist_task_report(db, t, evaluation)
+            await publish_event(
+                "task.report.generated",
+                "INFO",
+                "api",
+                {
+                    "task_id": t.id,
+                    "report_id": report.id,
+                    "threat_detected": evaluation["threat_detected"],
+                    "threat_risk": evaluation["threat_risk"],
+                    "summary": evaluation["summary"],
+                },
+                score=evaluation["alert_score"],
+            )
+        if ai.get("task_alerts_enabled", True) and evaluation["should_alert"]:
+            await publish_event(
+                "task.alert",
+                "WARN" if evaluation["threat_detected"] else "INFO",
+                "api",
+                {
+                    **evaluation["alert"],
+                    "report_id": report.id if report is not None else None,
+                },
+                score=evaluation["alert_score"],
+            )
+    except Exception as exc:
+        await publish_event(
+            "task.report.error",
+            "WARN",
+            "api",
+            {"task_id": t.id, "error": str(exc)[:300]},
+        )
     return _task_out(t)
 
 

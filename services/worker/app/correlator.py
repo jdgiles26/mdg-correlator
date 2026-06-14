@@ -21,6 +21,7 @@ from typing import Any, Dict, List
 from .db import SessionLocal
 from .nats_bus import publish
 from .settings import settings
+from .runtime_settings import get_runtime_ai_settings
 
 TRACK_WINDOW_SEC = 30     # seconds of inactivity to close a track
 ANOMALY_WINDOW_SEC = 60   # rolling window for cross-feed anomaly correlation
@@ -92,6 +93,7 @@ class Correlator:
         self.tracks: Dict[tuple, TrackState] = {}
         # Recent high-score events for anomaly clustering: list of (ts, feed, score)
         self.recent_highs: List[tuple] = []
+        self.last_cluster_emit = 0.0
 
     def ingest(self, feed: str, detections: list[dict]) -> list[dict]:
         """
@@ -99,16 +101,23 @@ class Correlator:
         Returns list of track events to emit.
         """
         now = time.time()
+        ai = get_runtime_ai_settings()
+        if not ai.get("correlator_enabled", True):
+            return []
+
+        min_score = float(ai.get("correlator_min_score", 0.7))
+        cooldown = int(ai.get("correlator_cooldown_sec", 60))
         events_out = []
 
         # Group detections by label
         by_label: Dict[str, list] = defaultdict(list)
         for d in detections:
-            by_label[d.get("label", "object")].append(d)
+            label = d.get("label") or d.get("class") or d.get("class_name") or "object"
+            by_label[str(label)].append(d)
 
         for label, dets in by_label.items():
             key = (feed, label)
-            peak = max(float(d.get("conf", 0.5)) for d in dets)
+            peak = max(float(d.get("conf", d.get("score", 0.5))) for d in dets)
 
             if key not in self.tracks:
                 self.tracks[key] = TrackState(feed=feed, label=label)
@@ -127,8 +136,7 @@ class Correlator:
                 "peak_score": round(t.peak_score, 3),
             })
 
-            # Anomaly clustering: record if score > 0.7
-            if peak >= 0.7:
+            if peak >= min_score:
                 self.recent_highs.append((now, feed, peak))
 
         # Expire stale tracks
@@ -143,7 +151,7 @@ class Correlator:
 
         # Check for cross-feed anomaly cluster
         feeds_in_window = {f for _, f, _ in self.recent_highs}
-        if len(feeds_in_window) >= ANOMALY_MIN_FEEDS:
+        if len(feeds_in_window) >= ANOMALY_MIN_FEEDS and now - self.last_cluster_emit >= cooldown:
             scores = [s for _, _, s in self.recent_highs]
             avg = sum(scores) / len(scores)
             events_out.append({
@@ -154,7 +162,7 @@ class Correlator:
                 "window_start": min(ts for ts, _, _ in self.recent_highs),
                 "window_end": now,
             })
-            # Reset to avoid spam
+            self.last_cluster_emit = now
             self.recent_highs.clear()
 
         return events_out

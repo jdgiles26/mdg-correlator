@@ -7,7 +7,17 @@
  * - Full audit trail per task
  */
 import React, { useCallback, useEffect, useState } from "react";
-import { listTasks, createTask, patchTask, getTask, type Task } from "../api";
+import {
+  listTasks,
+  createTask,
+  patchTask,
+  getTask,
+  listReports,
+  generateTaskReport,
+  downloadTaskReport,
+  type Task,
+  type TaskReport,
+} from "../api";
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 function card(border?: string): React.CSSProperties {
@@ -79,6 +89,7 @@ function CreateModal({ onCreated, onClose }: { onCreated: () => void; onClose: (
   const [desc, setDesc] = useState("");
   const [priority, setPriority] = useState("normal");
   const [assignee, setAssignee] = useState("");
+  const [sourceEventId, setSourceEventId] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
@@ -86,7 +97,14 @@ function CreateModal({ onCreated, onClose }: { onCreated: () => void; onClose: (
     if (!title.trim()) return;
     setBusy(true);
     try {
-      await createTask({ title: title.trim(), description: desc || undefined, priority, assignee: assignee || undefined });
+      const parsedSourceEventId = Number(sourceEventId);
+      await createTask({
+        title: title.trim(),
+        description: desc || undefined,
+        priority,
+        assignee: assignee || undefined,
+        source_event_id: Number.isFinite(parsedSourceEventId) && parsedSourceEventId > 0 ? parsedSourceEventId : undefined,
+      });
       onCreated();
       onClose();
     } catch (e: any) {
@@ -122,6 +140,10 @@ function CreateModal({ onCreated, onClose }: { onCreated: () => void; onClose: (
           <label style={{ fontSize: 12, color: "#94a3b8" }}>Assignee (optional)</label>
           <input value={assignee} onChange={(e: any) => setAssignee(e.target.value)} style={inp()} placeholder="operator@unit" />
         </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <label style={{ fontSize: 12, color: "#94a3b8" }}>Source event ID (optional)</label>
+          <input value={sourceEventId} onChange={(e: any) => setSourceEventId(e.target.value)} style={inp()} placeholder="Persisted event id to anchor this task" />
+        </div>
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
           <button onClick={onClose} style={btn()}>Cancel</button>
           <button onClick={submit} disabled={busy || !title.trim()} style={{ ...btn(true), opacity: busy || !title.trim() ? 0.5 : 1 }}>
@@ -136,12 +158,20 @@ function CreateModal({ onCreated, onClose }: { onCreated: () => void; onClose: (
 // ─── Task detail panel ────────────────────────────────────────────────────────
 function TaskDetail({ task, onUpdated, onClose }: { task: Task; onUpdated: () => void; onClose: () => void }) {
   const [detail, setDetail] = useState<(Task & { audit_trail: any[] }) | null>(null);
+  const [reports, setReports] = useState<TaskReport[]>([]);
   const [note, setNote] = useState("");
   const [outcome, setOutcome] = useState(task.outcome ?? "");
   const [busy, setBusy] = useState(false);
+  const [reportBusy, setReportBusy] = useState(false);
+  const [reportError, setReportError] = useState("");
 
   useEffect(() => {
-    getTask(task.id).then(setDetail).catch(() => {});
+    Promise.all([getTask(task.id), listReports(task.id)])
+      .then(([taskDetail, reportRows]) => {
+        setDetail(taskDetail);
+        setReports(reportRows.items);
+      })
+      .catch(() => {});
   }, [task.id]);
 
   async function doStatus(status: string) {
@@ -163,6 +193,20 @@ function TaskDetail({ task, onUpdated, onClose }: { task: Task; onUpdated: () =>
     } catch { setBusy(false); }
   }
 
+  async function regenerateReport() {
+    setReportBusy(true);
+    setReportError("");
+    try {
+      const report = await generateTaskReport(task.id);
+      setReports((prev) => [report, ...prev.filter((item) => item.id !== report.id)]);
+      onUpdated();
+    } catch (e: any) {
+      setReportError(e.message || String(e));
+    } finally {
+      setReportBusy(false);
+    }
+  }
+
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,.75)", display: "flex", alignItems: "center", justifyContent: "center" }}>
       <div onClick={(e: any) => e.stopPropagation()} style={{ background: "#0b1024", border: "1px solid #1f2937", borderRadius: 16, padding: 24, width: 560, maxHeight: "80vh", overflow: "auto", display: "flex", flexDirection: "column", gap: 12 }}>
@@ -177,6 +221,40 @@ function TaskDetail({ task, onUpdated, onClose }: { task: Task; onUpdated: () =>
           {task.assignee && <span style={{ fontSize: 12, color: "#64748b" }}>@ {task.assignee}</span>}
         </div>
         {task.description && <div style={{ fontSize: 12, color: "#94a3b8" }}>{task.description}</div>}
+
+        <div style={card()}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 11, opacity: 0.6 }}>INTELLIGENCE REPORTS</div>
+              <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 4 }}>
+                Saved assessments combine task text, ingested sources, and correlated live-stream events.
+              </div>
+            </div>
+            <button onClick={regenerateReport} disabled={reportBusy} style={btn(true, "#38bdf8")}>
+              {reportBusy ? "Generating…" : (reports.length ? "Regenerate report" : "Generate report")}
+            </button>
+          </div>
+          {reportError && <div style={{ color: "#fca5a5", fontSize: 12, marginTop: 8 }}>{reportError}</div>}
+          <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
+            {reports.map((report) => (
+              <div key={report.id} style={{ border: "1px solid #1f2937", borderRadius: 10, padding: 10, background: "#050814" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+                  <div style={{ fontSize: 12, fontWeight: 700 }}>{report.title}</div>
+                  <button onClick={() => downloadTaskReport(report.id)} style={btn(false)}>Download</button>
+                </div>
+                <div style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>
+                  {report.threat_risk.toUpperCase()} risk • {report.related_sources_count} source match{report.related_sources_count === 1 ? "" : "es"} • {report.correlated_events_count} correlated event{report.correlated_events_count === 1 ? "" : "s"}
+                </div>
+                {report.summary && <div style={{ fontSize: 12, color: "#cbd5e1", marginTop: 6 }}>{report.summary}</div>}
+              </div>
+            ))}
+            {!reports.length && (
+              <div style={{ fontSize: 12, color: "#64748b" }}>
+                No persisted report yet. Generate one manually or enable automatic task reports in AI Controls.
+              </div>
+            )}
+          </div>
+        </div>
 
         {/* Status actions */}
         {task.status !== "closed" && task.status !== "cancelled" && (

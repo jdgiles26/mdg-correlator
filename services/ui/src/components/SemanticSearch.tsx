@@ -1,12 +1,12 @@
 /**
  * SemanticSearch — vector similarity search over ingested content.
  *
- * When ENABLE_EMBEDDINGS=true, queries the Qdrant collection "mission_chunks"
+ * When ENABLE_EMBEDDINGS=true, queries pgvector-backed embeddings in Postgres
  * via the API and returns the most semantically similar text chunks.
  * When disabled, shows a graceful "not enabled" message.
  */
 import React, { useState } from "react";
-import { semanticSearch, type SearchHit } from "../api";
+import { answerSearchWithLocalModel, semanticSearch, type SearchHit } from "../api";
 
 const SOURCE_TYPES = ["all", "osint", "document", "url", "event"];
 
@@ -73,11 +73,14 @@ export function SemanticSearch() {
   const [embeddingsEnabled, setEmbeddingsEnabled] = useState<boolean | null>(null);
   const [msg, setMsg] = useState("");
   const [searched, setSearched] = useState(false);
+  const [answer, setAnswer] = useState<{ model: string; answer: string } | null>(null);
+  const [answerBusy, setAnswerBusy] = useState(false);
 
   async function doSearch() {
     if (!query.trim()) return;
     setLoading(true);
     setMsg("");
+    setAnswer(null);
     try {
       const res = await semanticSearch(query.trim(), topK, sourceType === "all" ? undefined : sourceType);
       setEmbeddingsEnabled(res.enabled);
@@ -88,6 +91,23 @@ export function SemanticSearch() {
       setMsg(e.message || String(e));
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function askLocalModel() {
+    if (!query.trim() || results.length === 0) return;
+    setAnswerBusy(true);
+    setMsg("");
+    try {
+      const res = await answerSearchWithLocalModel(
+        query.trim(),
+        results.map((hit) => hit.text)
+      );
+      setAnswer(res);
+    } catch (e: any) {
+      setMsg(e.message || String(e));
+    } finally {
+      setAnswerBusy(false);
     }
   }
 
@@ -177,16 +197,45 @@ export function SemanticSearch() {
 
       {embeddingsEnabled === false && !msg && (
         <div style={{ ...card("#f59e0b"), color: "#fde68a", fontSize: 12 }}>
-          ⚠ Embeddings are not enabled. Set <code>ENABLE_EMBEDDINGS=true</code> in .env and rebuild the worker.
+          ⚠ Embeddings are disabled in AI Controls.
         </div>
       )}
 
       {/* Results */}
       {searched && embeddingsEnabled && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ fontSize: 12, opacity: 0.6 }}>
-            {results.length} results for "{query}"
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+            <div style={{ fontSize: 12, opacity: 0.6 }}>
+              {results.length} results for "{query}"
+            </div>
+            <button
+              onClick={askLocalModel}
+              disabled={answerBusy || results.length === 0}
+              style={{
+                padding: "8px 12px",
+                borderRadius: 999,
+                border: "1px solid #22c55e",
+                background: "rgba(34,197,94,.16)",
+                color: "#e5e7eb",
+                cursor: answerBusy || results.length === 0 ? "not-allowed" : "pointer",
+                opacity: answerBusy || results.length === 0 ? 0.5 : 1,
+                fontSize: 12,
+                fontWeight: 700,
+              }}
+            >
+              {answerBusy ? "Asking local model…" : "Ask local Ollama"}
+            </button>
           </div>
+          {answer && (
+            <div style={{ ...card("#22c55e"), lineHeight: 1.6 }}>
+              <div style={{ fontSize: 11, opacity: 0.6, marginBottom: 8 }}>
+                Answered by {answer.model}
+              </div>
+              <div style={{ fontSize: 13, color: "#dbe4f0", whiteSpace: "pre-wrap" }}>
+                {answer.answer}
+              </div>
+            </div>
+          )}
           {results.length === 0 && (
             <div style={{ ...card(), fontSize: 13, opacity: 0.6, textAlign: "center", padding: 24 }}>
               No results above similarity threshold. Try a different query or ingest more content.

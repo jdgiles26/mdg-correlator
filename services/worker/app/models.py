@@ -4,9 +4,10 @@ Must stay in sync with the API-side models.py for shared tables.
 """
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy import (
-    String, Boolean, DateTime, Float, Text, Integer, ForeignKey
+    String, Boolean, DateTime, Float, Text, Integer, ForeignKey, Index
 )
 from sqlalchemy.sql import func
+from pgvector.sqlalchemy import Vector
 
 
 class Base(DeclarativeBase):
@@ -32,6 +33,15 @@ class Prediction(Base):
     anomaly_score: Mapped[float] = mapped_column(Float)
 
 
+class RuntimeConfig(Base):
+    __tablename__ = "runtime_config"
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value_json: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class IngestObject(Base):
     """Minimal view of ingest_objects used by the embed worker."""
     __tablename__ = "ingest_objects"
@@ -45,14 +55,23 @@ class IngestObject(Base):
 
 
 class Chunk(Base):
-    """Text chunk stored in Postgres and Qdrant."""
+    """Text chunk stored in Postgres with an in-row pgvector embedding."""
     __tablename__ = "chunks"
+    __table_args__ = (
+        Index(
+            "ix_chunks_embedding_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_with={"m": 16, "ef_construction": 64},
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+    )
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     ingest_id: Mapped[int] = mapped_column(Integer, index=True)
     chunk_index: Mapped[int] = mapped_column(Integer, default=0)
     text: Mapped[str] = mapped_column(Text)
-    qdrant_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    source_type: Mapped[str] = mapped_column(String(32), default="document")
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(384), nullable=True)
+    source_type: Mapped[str] = mapped_column(String(32), default="document", index=True)
     source_label: Mapped[str | None] = mapped_column(String(512), nullable=True)
     created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
 

@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from .db import SessionLocal
 from .models import Prediction
 from .nats_bus import publish, nc, EVENT_SUBJECT
+from .runtime_settings import get_runtime_ai_settings
 
 class EWMA:
     def __init__(self, alpha: float = 0.2):
@@ -35,6 +36,7 @@ async def predictor_loop(stop_event: asyncio.Event):
     stats = defaultdict(lambda: EWMA(alpha=0.25))
     counts = defaultdict(int)
     last_emit = time.time()
+    last_publish = defaultdict(float)
 
     c = await nc()
     sub = await c.subscribe(EVENT_SUBJECT)
@@ -61,14 +63,29 @@ async def predictor_loop(stop_event: asyncio.Event):
                 obj = json.loads(msg.data.decode("utf-8"))
                 if obj.get("topic") == "video.detections":
                     feed = (obj.get("payload") or {}).get("feed", "unknown")
-                    counts[feed] += 1
+                    payload = obj.get("payload") or {}
+                    observed = payload.get("count")
+                    if observed is None:
+                        observed = len(payload.get("detections") or []) or 1
+                    counts[feed] += int(observed)
             except Exception:
                 pass
 
         # Every 30s, update EWMA and emit prediction
         if now - last_emit >= 30:
             last_emit = now
+            ai = get_runtime_ai_settings()
             for feed, ccount in list(counts.items()):
+                if not ai.get("predictor_enabled", False):
+                    counts[feed] = 0
+                    continue
+                if ccount <= 0 and not ai.get("predictor_emit_empty_windows", False):
+                    counts[feed] = 0
+                    continue
+                if ccount < int(ai.get("predictor_min_events", 1)):
+                    counts[feed] = 0
+                    continue
+
                 metric = f"events.detections_per_30s.{feed}"
                 model = stats[metric]
                 model.update(ccount)
@@ -76,11 +93,21 @@ async def predictor_loop(stop_event: asyncio.Event):
                 anomaly = float(min(1.0, abs(z) / 4.0))
                 predicted = float(model.mu if model.mu is not None else ccount)
                 await persist(metric, predicted, anomaly, horizon_sec=30)
-                await publish("predictor.forecast", "INFO", "predictor", {
-                    "metric": metric,
-                    "window_sec": 30,
-                    "observed": ccount,
-                    "predicted": predicted,
-                    "zscore": z
-                }, score=anomaly)
+                min_score = float(ai.get("predictor_min_anomaly_score", 0.7))
+                cooldown = int(ai.get("predictor_cooldown_sec", 120))
+                if anomaly >= min_score and now - last_publish[metric] >= cooldown:
+                    await publish(
+                        "predictor.forecast",
+                        "WARN",
+                        "predictor",
+                        {
+                            "metric": metric,
+                            "window_sec": 30,
+                            "observed": ccount,
+                            "predicted": predicted,
+                            "zscore": z,
+                        },
+                        score=anomaly,
+                    )
+                    last_publish[metric] = now
                 counts[feed] = 0

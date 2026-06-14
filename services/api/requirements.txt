@@ -12,8 +12,11 @@ beautifulsoup4==4.12.3
 orjson==3.10.11
 pyyaml==6.0.2
 # Intelligence layer (search endpoint; embedding happens in worker)
-qdrant-client==1.12.1
+pgvector==0.4.2
 sentence-transformers==3.4.1
+numpy==1.26.4
 # Policy / auth
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
+pillow==11.0.0
+mediapipe==0.10.18

@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     mediamtx_rtsp_base: str = "rtsp://mediamtx:8554"
 
     enable_embeddings: bool = False
+    ollama_base_url: str = "http://host.docker.internal:11434"
+    ollama_generate_model: str | None = None
+    ollama_timeout_sec: float = 30.0
 
     class Config:
         env_prefix = ""

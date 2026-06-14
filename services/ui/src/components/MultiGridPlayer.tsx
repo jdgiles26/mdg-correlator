@@ -1,7 +1,7 @@
 /**
  * MultiGridPlayer — single cell in the 25-grid layout.
  *
- * Uses @vidstack/react with preset-based rendering:
+ * Uses native media elements with hls.js for reliable playback in the grid:
  *   • "hls"     — HLS .m3u8 stream (type explicitly set to application/x-mpegurl)
  *   • "live"    — same as hls, streamType="live"
  *   • "youtube" — YouTube video/stream by ID or full URL
@@ -9,16 +9,11 @@
  *   • "video"   — direct MP4/WebM file
  *   • "audio"   — audio-only stream or file
  *
- * Vidstack docs: https://vidstack.io/player/docs/react/
  */
-import React, { useMemo } from "react";
-import { MediaPlayer, MediaProvider, Poster } from "@vidstack/react";
-import {
-  defaultLayoutIcons,
-  DefaultVideoLayout,
-} from "@vidstack/react/player/layouts/default";
-import "@vidstack/react/player/styles/default/theme.css";
-import "@vidstack/react/player/styles/default/layouts/video.css";
+import React, { useMemo, useRef } from "react";
+import { DetectionOverlay } from "./DetectionOverlay";
+import type { Detection } from "../api";
+import { StreamMedia } from "./StreamMedia";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -47,59 +42,41 @@ interface MultiGridPlayerProps {
   stream: GridStream;
   /** Cell height in px – defaults to 160 */
   cellHeight?: number;
+  /** Detections from grid-level detection */
+  detections?: Detection[];
 }
 
 // ─── Source resolution ────────────────────────────────────────────────────────
 
-/**
- * Build the src value Vidstack expects per preset.
- * HLS/live: must include explicit MIME type so Vidstack uses its HLS loader.
- * YouTube/Vimeo: Vidstack expects the "protocol/id" format.
- */
-function buildSrc(
-  raw: string,
-  preset: StreamPreset
-): string | { src: string; type: string } {
+function buildSrc(raw: string, preset: StreamPreset): string {
   switch (preset) {
     case "hls":
     case "live":
-      return { src: raw, type: "application/x-mpegurl" };
+      return raw;
 
     case "youtube": {
       const m = raw.match(
         /(?:youtube\.com\/(?:watch\?v=|embed\/|v\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/
       );
       const id = m ? m[1] : raw;
-      return `youtube/${id}`;
+      return `https://www.youtube.com/embed/${id}?autoplay=1&mute=1&playsinline=1`;
     }
 
     case "vimeo": {
       const m = raw.match(/vimeo\.com\/(?:video\/)?(\d+)/);
       const id = m ? m[1] : raw;
-      return `vimeo/${id}`;
+      return `https://player.vimeo.com/video/${id}?autoplay=1&muted=1`;
     }
 
     case "video":
-      return { src: raw, type: guessVideoType(raw) };
+      return raw;
 
     case "audio":
-      return { src: raw, type: guessAudioType(raw) };
+      return raw;
 
     default:
       return raw;
   }
-}
-
-function guessVideoType(url: string): string {
-  if (url.includes(".m3u8")) return "application/x-mpegurl";
-  if (url.includes(".webm")) return "video/webm";
-  return "video/mp4";
-}
-
-function guessAudioType(url: string): string {
-  if (url.includes(".ogg")) return "audio/ogg";
-  if (url.includes(".aac")) return "audio/aac";
-  return "audio/mpeg";
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -107,15 +84,17 @@ function guessAudioType(url: string): string {
 export function MultiGridPlayer({
   stream,
   cellHeight = 160,
+  detections,
 }: MultiGridPlayerProps) {
   const preset: StreamPreset = stream.preset ?? "live";
   const isLive = preset === "live" || preset === "hls";
   const isWebpage = preset === "webpage";
+  const isEmbed = preset === "youtube" || preset === "vimeo";
+  const isVideo = !isWebpage && preset !== "audio";
 
-  const src = useMemo(
-    () => (isWebpage ? stream.hlsUrl : buildSrc(stream.hlsUrl, preset)),
-    [stream.hlsUrl, preset, isWebpage]
-  );
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const src = useMemo(() => buildSrc(stream.hlsUrl, preset), [stream.hlsUrl, preset]);
 
   /** Shared label overlay (top bar with name + location) */
   const labelOverlay = (
@@ -173,8 +152,28 @@ export function MultiGridPlayer({
     </div>
   );
 
+  // Detection stats overlay
+  const detectionStats = detections && detections.length > 0 && (
+    <div
+      style={{
+        position: "absolute",
+        bottom: 8,
+        left: 8,
+        zIndex: 20,
+        background: "rgba(0,0,0,0.7)",
+        padding: "4px 8px",
+        borderRadius: 6,
+        fontSize: 10,
+        color: "#e5e7eb",
+      }}
+    >
+      {detections.length} object{detections.length !== 1 ? "s" : ""}
+    </div>
+  );
+
   return (
     <div
+      ref={containerRef}
       style={{
         position: "relative",
         background: "#000",
@@ -186,10 +185,9 @@ export function MultiGridPlayer({
     >
       {labelOverlay}
 
-      {isWebpage ? (
-        /* ── Webpage iframe embed ─────────────────────────────────────── */
+      {isWebpage || isEmbed ? (
         <iframe
-          src={stream.hlsUrl}
+          src={src}
           title={stream.label}
           style={{
             width: "100%",
@@ -202,25 +200,29 @@ export function MultiGridPlayer({
           loading="lazy"
         />
       ) : (
-        /* ── Vidstack media player ────────────────────────────────────── */
-        <MediaPlayer
-          src={src as any}
-          autoPlay
-          muted
-          playsInline
-          streamType={isLive ? "live" : "on-demand"}
-          style={{ width: "100%", height: "100%" }}
-          viewType="video"
-          logLevel="error"
-        >
-          <MediaProvider>
-            {stream.poster && (
-              <Poster src={stream.poster} alt={stream.label} />
-            )}
-          </MediaProvider>
-          <DefaultVideoLayout icons={defaultLayoutIcons} />
-        </MediaPlayer>
+        <div style={{ position: "relative", width: "100%", height: "100%" }}>
+          <StreamMedia
+            kind={preset === "audio" ? "audio" : isLive ? "hls" : "video"}
+            src={src}
+            title={stream.label}
+            autoPlay
+            muted
+            controls={false}
+            poster={stream.poster}
+          />
+
+          {/* Detection overlay with bounding boxes */}
+          {detections && detections.length > 0 && containerRef.current && (
+            <DetectionOverlay
+              detections={detections}
+              width={containerRef.current.offsetWidth}
+              height={containerRef.current.offsetHeight}
+            />
+          )}
+        </div>
       )}
+
+      {detectionStats}
 
       <style>{`
         @keyframes livePulse {

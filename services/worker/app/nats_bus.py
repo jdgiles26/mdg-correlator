@@ -1,5 +1,6 @@
 import asyncio
 import json
+from typing import Callable, Any
 from nats.aio.client import Client as NATS
 from .settings import settings
 
@@ -21,3 +22,20 @@ async def publish(topic: str, severity: str, source: str, payload: dict, score: 
     c = await nc()
     msg = {"topic": topic, "severity": severity, "source": source, "payload": payload, "score": score}
     await c.publish(EVENT_SUBJECT, json.dumps(msg).encode("utf-8"))
+
+async def subscribe_topic(topic: str, callback: Callable[[dict[str, Any]], Any]):
+    """
+    Subscribe to a specific NATS topic and call the callback for each message.
+    Returns a subscription object that can be used to unsubscribe.
+    """
+    c = await nc()
+    
+    async def _cb(msg):
+        try:
+            data = json.loads(msg.data.decode())
+            await callback(data)
+        except Exception:
+            pass
+    
+    sub = await c.subscribe(topic, cb=_cb)
+    return sub

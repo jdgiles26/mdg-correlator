@@ -1,15 +1,9 @@
 /**
- * HlsPlayer — single-feed preview using @vidstack/react.
+ * HlsPlayer — single-feed preview using native video + hls.js.
  * Used in the Dashboard and Feeds tabs for the selected feed's preview.
  */
 import React from "react";
-import { MediaPlayer, MediaProvider, Poster } from "@vidstack/react";
-import {
-  defaultLayoutIcons,
-  DefaultVideoLayout,
-} from "@vidstack/react/player/layouts/default";
-import "@vidstack/react/player/styles/default/theme.css";
-import "@vidstack/react/player/styles/default/layouts/video.css";
+import { StreamMedia } from "./StreamMedia";
 
 export function HlsPlayer({ hlsUrl }: { hlsUrl: string }) {
   return (
@@ -19,22 +13,19 @@ export function HlsPlayer({ hlsUrl }: { hlsUrl: string }) {
         borderRadius: 12,
         overflow: "hidden",
         background: "#000",
+        minHeight: 320,
       }}
     >
-      <MediaPlayer
+      <StreamMedia
+        kind="hls"
         src={hlsUrl}
+        title="Live stream preview"
         autoPlay
         muted
-        playsInline
-        live
-        streamType="live"
-        style={{ width: "100%", height: 320 }}
-        viewType="video"
-        logLevel="warn"
-      >
-        <MediaProvider />
-        <DefaultVideoLayout icons={defaultLayoutIcons} />
-      </MediaPlayer>
+        controls
+        showStatus
+        style={{ height: 320 }}
+      />
     </div>
   );
 }

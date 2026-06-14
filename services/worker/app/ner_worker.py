@@ -19,6 +19,7 @@ from typing import Any
 from .db import SessionLocal
 from .nats_bus import publish
 from .settings import settings
+from .runtime_settings import get_runtime_ai_settings
 
 # ─── Lazy model ───────────────────────────────────────────────────────────────
 
@@ -158,8 +159,8 @@ def _handle_detection(payload: dict) -> int:
         feed_id = _upsert_entity(db, "Feed", feed, confidence=1.0)
         db.flush()
         for det in detections[:50]:
-            label = det.get("label", "detection")
-            conf = float(det.get("conf", 0.5))
+            label = det.get("label") or det.get("class") or det.get("class_name") or "detection"
+            conf = float(det.get("conf", det.get("score", 0.5)))
             obs_name = f"{label} on {feed}"
             obs_id = _upsert_entity(db, "Observation", obs_name, confidence=conf)
             db.flush()
@@ -177,15 +178,6 @@ def _handle_detection(payload: dict) -> int:
 
 async def ner_loop(stop_event: asyncio.Event):
     await publish("ner.start", "INFO", "ner_worker", {})
-
-    # Warm up spaCy
-    try:
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, _get_nlp)
-        await publish("ner.ready", "INFO", "ner_worker", {"status": "spacy loaded"})
-    except Exception as e:
-        await publish("ner.error", "WARN", "ner_worker", {"error": str(e)[:300]})
-        return
 
     import nats  # type: ignore
     nc = await nats.connect(settings.nats_url)
@@ -205,6 +197,9 @@ async def ner_loop(stop_event: asyncio.Event):
         while not stop_event.is_set():
             try:
                 topic, data = await asyncio.wait_for(queue.get(), timeout=1.0)
+                ai = get_runtime_ai_settings()
+                if not ai.get("ner_enabled", False):
+                    continue
                 payload = data.get("payload", {})
                 loop = asyncio.get_event_loop()
                 try:

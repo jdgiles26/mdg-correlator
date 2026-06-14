@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     mediamtx_hls_base: str = "http://localhost:8888"
 
     enable_embeddings: bool = False
+    ollama_base_url: str = "http://host.docker.internal:11434"
+    ollama_generate_model: str | None = None
+    ollama_timeout_sec: float = 30.0
 
     class Config:
         env_prefix = ""

@@ -9,17 +9,19 @@ events          — NATS event log (all bus traffic persisted)
 predictions     — anomaly prediction timeseries
 entities        — knowledge-graph entity nodes (asset, sensor, document, …)
 edges           — knowledge-graph relationships between entities
-chunks          — text chunks linked to ingest_objects, embedded into Qdrant
+chunks          — text chunks linked to ingest_objects, embedded into Postgres
 tasks           — operator tasking workflow (alerts → actions → dispositions)
 task_events     — immutable audit trail for task state transitions
+task_reports    — persisted AI-assisted task intelligence reports
 audit_log       — immutable per-request audit log (policy layer)
 """
 from sqlalchemy import (
     String, Boolean, DateTime, Float, ForeignKey,
-    Text, Integer, JSON
+    Text, Integer, JSON, Index
 )
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
+from pgvector.sqlalchemy import Vector
 from .db import Base
 
 
@@ -68,6 +70,15 @@ class Prediction(Base):
     horizon_sec: Mapped[int] = mapped_column(default=300)
     predicted: Mapped[float] = mapped_column(Float)
     anomaly_score: Mapped[float] = mapped_column(Float)
+
+
+class RuntimeConfig(Base):
+    __tablename__ = "runtime_config"
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value_json: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 # ─── Knowledge-graph layer ────────────────────────────────────────────────────
@@ -124,15 +135,24 @@ class Edge(Base):
 class Chunk(Base):
     """
     Text chunk derived from an IngestObject.
-    The vector is stored in Qdrant; this table holds metadata for retrieval.
+    The vector is stored alongside the chunk in Postgres via pgvector.
     """
     __tablename__ = "chunks"
+    __table_args__ = (
+        Index(
+            "ix_chunks_embedding_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_with={"m": 16, "ef_construction": 64},
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+    )
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     ingest_id: Mapped[int] = mapped_column(ForeignKey("ingest_objects.id"), index=True)
     chunk_index: Mapped[int] = mapped_column(Integer, default=0)
     text: Mapped[str] = mapped_column(Text)
-    qdrant_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)  # UUID string
-    source_type: Mapped[str] = mapped_column(String(32), default="document")  # osint|document|url|event
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(384), nullable=True)
+    source_type: Mapped[str] = mapped_column(String(32), default="document", index=True)  # osint|document|url|event
     source_label: Mapped[str | None] = mapped_column(String(512), nullable=True)
     created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
 
@@ -177,6 +197,33 @@ class TaskEvent(Base):
     action: Mapped[str] = mapped_column(String(64))   # created | status_change | note | assigned | closed
     detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     ts: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class TaskReport(Base):
+    """
+    Persisted task intelligence report generated from ingested sources and event correlation.
+    """
+    __tablename__ = "task_reports"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), index=True)
+    source_event_id: Mapped[int | None] = mapped_column(ForeignKey("events.id"), nullable=True)
+    report_type: Mapped[str] = mapped_column(String(64), default="threat_assessment", index=True)
+    title: Mapped[str] = mapped_column(String(512))
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    threat_detected: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    threat_risk: Mapped[str] = mapped_column(String(32), default="low", index=True)
+    risk_score: Mapped[float] = mapped_column(Float, default=0.0)
+    confidence_score: Mapped[float] = mapped_column(Float, default=0.0)
+    generation_mode: Mapped[str] = mapped_column(String(32), default="heuristic")
+    model_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    correlated_events_count: Mapped[int] = mapped_column(Integer, default=0)
+    related_sources_count: Mapped[int] = mapped_column(Integer, default=0)
+    report_markdown: Mapped[str] = mapped_column(Text)
+    report_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    updated_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 # ─── Policy / audit ───────────────────────────────────────────────────────────

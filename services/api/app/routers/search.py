@@ -1,5 +1,5 @@
 """
-Semantic search API — powered by Qdrant vector similarity.
+Semantic search API backed by pgvector in Postgres.
 
 POST /api/search/semantic   — text query → similar chunks
 GET  /api/search/chunks     — list recently ingested chunks (no embedding required)
@@ -7,42 +7,30 @@ GET  /api/search/chunks     — list recently ingested chunks (no embedding requ
 When ENABLE_EMBEDDINGS=false the endpoint returns a graceful "not enabled" message
 so the UI can degrade cleanly.
 """
-import json
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..models import Chunk, IngestObject
+from ..models import Chunk
+from ..runtime_settings import load_ai_settings
 from ..settings import settings
 
 router = APIRouter(prefix="/api/search", tags=["search"])
 
-# ─── Lazy Qdrant client ───────────────────────────────────────────────────────
-
-_qdrant_client = None
-
-def _get_qdrant():
-    global _qdrant_client
-    if _qdrant_client is None:
-        from qdrant_client import QdrantClient  # type: ignore
-        _qdrant_client = QdrantClient(host="qdrant", port=6333)
-    return _qdrant_client
-
-
-# ─── Lazy embedding model ─────────────────────────────────────────────────────
 
 _embed_model = None
+
 
 def _get_embed():
     global _embed_model
     if _embed_model is None:
         from sentence_transformers import SentenceTransformer  # type: ignore
+
         _embed_model = SentenceTransformer("all-MiniLM-L6-v2")
     return _embed_model
 
-
-# ─── Schemas ──────────────────────────────────────────────────────────────────
 
 class SemanticQuery(BaseModel):
     query: str
@@ -53,7 +41,6 @@ class SemanticQuery(BaseModel):
 
 class SearchHit(BaseModel):
     chunk_id: int
-    qdrant_id: str | None
     score: float
     text: str
     source_label: str | None
@@ -61,50 +48,44 @@ class SearchHit(BaseModel):
     ingest_id: int
 
 
-# ─── Endpoints ────────────────────────────────────────────────────────────────
-
 @router.post("/semantic")
 def semantic_search(body: SemanticQuery, db: Session = Depends(get_db)):
-    if not settings.enable_embeddings:
-        return {"enabled": False, "hits": [], "message": "Embeddings are disabled. Set ENABLE_EMBEDDINGS=true."}
+    ai = load_ai_settings(db)
+    if not settings.enable_embeddings or not ai.get("embeddings_enabled", settings.enable_embeddings):
+        return {"enabled": False, "hits": [], "message": "Embeddings are disabled in AI Controls."}
 
     try:
         model = _get_embed()
-        qdrant = _get_qdrant()
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Embedding/Qdrant unavailable: {exc}")
+        raise HTTPException(status_code=503, detail=f"Embedding model unavailable: {exc}")
 
-    # Embed the query
-    vec = model.encode(body.query).tolist()
+    query_vector = model.encode(body.query, normalize_embeddings=True).tolist()
+    top_k = max(1, min(body.top_k, 50))
+    similarity_floor = max(-1.0, min(body.score_threshold, 1.0))
+    distance = Chunk.embedding.cosine_distance(query_vector)
 
-    # Query Qdrant
-    filter_payload = {}
-    if body.source_type:
-        filter_payload = {"must": [{"key": "source_type", "match": {"value": body.source_type}}]}
-
-    results = qdrant.search(
-        collection_name="mission_chunks",
-        query_vector=vec,
-        limit=body.top_k,
-        score_threshold=body.score_threshold,
-        query_filter=filter_payload if filter_payload else None,
-        with_payload=True,
+    stmt = (
+        select(Chunk, distance.label("distance"))
+        .where(Chunk.embedding.is_not(None))
+        .where(distance <= 1 - similarity_floor)
     )
+    if body.source_type:
+        stmt = stmt.where(Chunk.source_type == body.source_type)
+    stmt = stmt.order_by(distance).limit(top_k)
 
+    rows = db.execute(stmt).all()
     hits = []
-    for r in results:
-        payload = r.payload or {}
-        chunk_id = payload.get("chunk_id")
-        chunk = db.query(Chunk).filter(Chunk.id == chunk_id).first() if chunk_id else None
-        hits.append({
-            "qdrant_id": str(r.id),
-            "score": round(r.score, 4),
-            "text": payload.get("text", ""),
-            "source_label": payload.get("source_label"),
-            "source_type": payload.get("source_type", "unknown"),
-            "ingest_id": payload.get("ingest_id"),
-            "chunk_id": chunk_id,
-        })
+    for chunk, distance_value in rows:
+        hits.append(
+            {
+                "score": round(max(-1.0, 1 - float(distance_value)), 4),
+                "text": chunk.text,
+                "source_label": chunk.source_label,
+                "source_type": chunk.source_type,
+                "ingest_id": chunk.ingest_id,
+                "chunk_id": chunk.id,
+            }
+        )
 
     return {"enabled": True, "hits": hits, "query": body.query}
 
@@ -131,7 +112,7 @@ def list_chunks(
                 "text_preview": c.text[:200],
                 "source_type": c.source_type,
                 "source_label": c.source_label,
-                "qdrant_id": c.qdrant_id,
+                "has_embedding": c.embedding is not None,
                 "created_at": c.created_at.isoformat() if c.created_at else None,
             }
             for c in rows
