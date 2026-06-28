@@ -15,7 +15,8 @@ This repo is designed for **legitimate monitoring and situational awareness** an
 - feeds you have **explicit permission** to access, or
 - feeds that are **explicitly published for public redistribution**.
 
-I did **not** implement “grab all government cameras / military feeds” automation, because:
+<img width="900" height="600" alt="image" src="https://github.com/user-attachments/assets/a7b7d5ae-14c9-4b9d-ab2b-80c99cb490ea" />
+
 - many feeds are not meant for bulk aggregation,
 - access and redistribution often has terms-of-service or legal constraints,
 - some could materially enable wrongdoing.
